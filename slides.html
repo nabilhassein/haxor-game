@@ -82,39 +82,34 @@
 <li>players should conceptually move simultaneously</li>
 <li>each player gets a bit of input; all n bits are XORed</li>
 <li>a player gets a point for correctly predicting the outcome of the XOR</li>
+<li>I chose it because it is minimal -- each player gets one bit of input</li>
 </ul>
 </section>
 <section class="slide level1" id="previously">
 <h1 id="previously">previously</h1>
 <ul>
-<li>I wrote a dead simple Sinatra server, my first Ruby program</li>
+<li>I wrote a simple Sinatra server, my first Ruby program</li>
 <li>But the standard HTTP request-response model works poorly for real-time games</li>
 <li>I failed to meet my own specification! Players didn't move simultaneously</li>
-</ul>
-</section>
-<section class="slide level1" id="the-haxor-game-1">
-<h1 id="the-haxor-game-1">the HAXOR game</h1>
-<ul>
-<li>the HAskell XOR game!</li>
 </ul>
 </section>
 <section class="slide level1" id="websockets">
 <h1 id="websockets">websockets</h1>
 <ul>
-<li>full-duplex communication over a single TCP connection; better for real-time</li>
+<li>full-duplex communication over a single TCP connection</li>
 <li>an entirely different protocol from HTTP, even though it uses port 80</li>
+<li>a more natural model for a real-time game than the client-server model</li>
 </ul>
 </section>
 <section class="slide level1" id="implementation">
 <h1 id="implementation">implementation</h1>
 <ul>
-<li>once again, I wrote it in Haskell because HASKELL</li>
+<li>HAskell XOR game -- HAXOR game</li>
 <li>I wanted chat in my game anyway, so I just modified the library's example (a chat server)</li>
 <li>IRC style: commands start with a '/', everything else is broadcasted</li>
 <li>server accepts incoming requests and communicates with clients</li>
-<li>a different thread sleeps for twenty seconds and then handles updating the score</li>
-<li>stateful program full of mutable variables (MVars)</li>
-<li>&quot;the world's finest imperative programming language&quot;</li>
+<li>a different thread loops forever, sleeping for twenty seconds and then updating clients' scores</li>
+<li>&quot;the world's finest imperative programming language&quot; -- stateful program was no problem</li>
 </ul>
 </section>
 <section class="slide level1" id="demo">
@@ -123,10 +118,9 @@
 <section class="slide level1" id="todos">
 <h1 id="todos">TODOs</h1>
 <ol type="1">
-<li>a browser client was kind of the entire point...but what is the front end I don't even</li>
+<li>a browser client (with buttons!) was kind of the entire point...but what is the front end I don't even</li>
 <li>deployment</li>
-<li>optional persistent identity for matchmaking, records</li>
-<li>change the mechanics to make the game more fun!</li>
+<li>any changes that make the game more fun!</li>
 </ol>
 <p>Come and commit!</p>
 </section>
