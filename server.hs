@@ -49,6 +49,7 @@ instance Show (WS.Sink a) where
 instance Show (MVar a) where
   show _ = "some mutable variable"
 
+
 -- data types
 data Bit = Zero | One deriving (Show, Read, Eq, Ord)
 instance Num Bit where
@@ -61,9 +62,6 @@ instance Num Bit where
 
 data Command = Play Bit | Bet Bit deriving (Show, Read, Eq, Ord)
 
--- note that in Haskell, using record syntax to declare a data type brings into
--- scope accessor functions with the same names as the fields.
--- An example used below in my function `xor` is play :: Client -> Bit
 data Client = Client {
     nick     :: Text
   , score    :: MVar Int
@@ -74,9 +72,9 @@ data Client = Client {
 
 type ServerState = [Client]
 
-
+-- client helper functions
 newClient :: Text -> WS.Sink WS.Hybi00 -> IO Client
-newClient    name    chan              = do
+newClient    name    chan               = do
   points <- newMVar 0
   input  <- newMVar 0
   gamble <- newMVar 0
@@ -85,12 +83,16 @@ newClient    name    chan              = do
 clientExists :: Client -> ServerState -> Bool
 clientExists    client                 = any (== nick client) . map nick
 
+-- main loop will check to ensure that there are no duplicate names
 addClient :: Client -> ServerState -> ServerState
 addClient = (:)
 
--- main loop will check to ensure that there are no duplicate names
 removeClient :: Client -> ServerState -> ServerState
 removeClient = filter . (/=)
+
+incrementScore :: Client -> IO Client
+incrementScore    client = modifyMVar (score client) $ \n ->
+  return (n + 1, client)
 
 updateClient :: Command -> Client -> IO Client
 updateClient    cmd        client  =
@@ -105,8 +107,7 @@ broadcast :: Text -> ServerState -> IO ()
 broadcast    msg     clients      = do
   T.putStrLn msg
   forM_ clients $ \client ->
-    WS.sendSink (channel client) (WS.textData $ msg <> "\n")
-
+    WS.sendSink (channel client) (WS.textData msg)
 
 parseMessage :: Text -> Either Text (Maybe Command)
 parseMessage    msg   = if T.head msg /= '/'
@@ -119,17 +120,12 @@ parseMessage    msg   = if T.head msg /= '/'
                           _         -> Nothing -- not a command
 
 
-
 -- game play
 xor :: ServerState -> IO Bit
 xor    clients = do
   let inputs = map play clients
   bits <- sequence $ map readMVar inputs
   return $ sum bits
-
-incrementScore :: Client -> IO Client
-incrementScore    client = let points = score client in do
-  modifyMVar points $ \n -> return (n + 1, client)
 
 scores :: ServerState -> Bit  -> IO Text
 scores    clients        result =
@@ -146,7 +142,7 @@ scores    clients        result =
                ".\nUpdated Scores:\n", playerScores]
 
 
-
+-- main logic
 main :: IO ()
 main  = do
   T.putStrLn "opened XOR game chat room..."
@@ -154,22 +150,19 @@ main  = do
   _     <- forkIO $ xorAndUpdate state
   WS.runServer "127.0.0.1" 8000 $ game state
 
-delay :: Int
-delay  = 2 * 10^7 -- 20 seconds
-
 -- Compare each connected client's bet to the xor of all the clients' plays:
 -- if it is different, the client's state is unaltered;
 -- if it is the same, the client's score is incremented
 xorAndUpdate :: MVar ServerState -> IO ()
 xorAndUpdate    state             = forever $ do
-  threadDelay delay
+  threadDelay $ 2 * 10^7 -- 20 seconds
   modifyMVar_ state $ \clients -> do
     result         <- xor clients
     updatedClients <- forM clients $ \client -> do
         clientBet <- readMVar $ bet client
-        if clientBet /= result
-          then return client
-          else incrementScore client >>= return
+        if clientBet == result
+          then incrementScore client >>= return
+          else return client
     scoreBoard <- scores updatedClients result
     broadcast scoreBoard updatedClients
     return updatedClients
@@ -199,14 +192,16 @@ talk    state               player  =
   flip WS.catchWsError catchDisconnect $ forever $ do
       input <- WS.receiveData
       case parseMessage input of
-        Left msg         -> liftIO $ do
-          clients <- readMVar state
-          broadcast (nick player <> ": " <> msg) clients
+        Left msg         -> liftIO $ readMVar state >>=
+                                       broadcast (nick player <> ": " <> msg)
             
         Right Nothing    -> WS.sendTextData ("*couldn't parse command*" :: Text)
 
+        -- inelegant to cycle through all the players; can this be improved?
         Right (Just cmd) -> liftIO $ modifyMVar_ state $ \clients ->
-          forM clients $ \client -> updateClient cmd client
+          forM clients $ \client -> if client == player
+                                    then updateClient cmd client
+                                    else return client
   where
     catchDisconnect e = case fromException e of
       Just WS.ConnectionClosed -> liftIO $ modifyMVar_ state $ \s -> do
