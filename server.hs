@@ -2,10 +2,10 @@
 
 THE XOR GAME
 
-This file implements the server for a game in which each player chooses:
+This file implements the server for a game in which each player makes 2 choices:
 which bit, zero or one, to XOR with every other player's choice of bit;
 and which bit, zero or one, the player bets will be the outcome of this XOR.
-The XOR takes place every ten seconds and a player gains a point when
+The XOR takes place every ten seconds. A player gains a point when
 their bet matches the outcome. Points accumulate without limit or reward.
 
 The game takes place in a chatroom. The first message the client sends to the
@@ -24,7 +24,7 @@ to model a game which takes place in real time. So I used WebSockets.
 Seeing that the standard example provided in the Haskell WebSockets library
 documentation is a simple chat server, this implementation was easy and short.
 
-I hope you enjoy reading it!
+I hope you enjoy reading it! Suggestions and pull requests welcome.
 
 -}
 
@@ -55,7 +55,7 @@ instance Num Bit where
   _   * _       = Zero
   abs           = id
   signum        = id
-  fromInteger n = if n `mod` 2 == 0 then Zero else One
+  fromInteger n = if even n then Zero else One
 
 data Command = Play Bit | Bet Bit deriving (Show, Read, Eq, Ord)
 
@@ -85,12 +85,12 @@ parseMessage    msg   = if T.head msg /= '/'
                           _         -> Nothing -- not a command
 
 -- ugly! perhaps use lenses?
-updateClient :: Command -> Client
-                -> ServerState -> IO ServerState
-updateClient    (Play bit) client@Client {nick, score, play, bet, channel} clients =
+updateClient :: Command -> Client                                       -> ServerState
+                -> IO ServerState
+updateClient    (Play bit) client@Client {nick, score, play, bet, channel} clients = do
   return $ addClient Client {nick, score, play = bit, bet, channel} $ 
             removeClient client clients
-updateClient    (Bet bit) client@Client {nick, score, play, bet, channel} clients =
+updateClient    (Bet  bit) client@Client {nick, score, play, bet, channel} clients = do
   return $ addClient Client {nick, score, play, bet = bit, channel} $ 
             removeClient client clients
 
@@ -110,7 +110,7 @@ removeClient = filter . (/=)
 broadcast :: Text -> ServerState -> IO ()
 broadcast    msg     clients      = do
   T.putStrLn msg
-  forM_ clients $ \client -> WS.sendSink (channel client) (WS.textData msg)
+  forM_ clients $ \client -> WS.sendSink (channel client) (WS.textData $ msg <> "\n")
 
 
 -- game play
@@ -121,7 +121,7 @@ xor = sum . map play -- get the bits out of the clients, then add them mod 2
 scores :: ServerState -> Text
 scores    clients      =
   let showPair :: (Text, Int) -> Text
-      showPair    (str,  n)     = str <> T.pack (show n)
+      showPair    (str,  n)     = str <> ": " <> T.pack (show n) <> " points"
   in T.concat $ map showPair $ zip (map nick clients) (map score clients)
 
 
@@ -133,7 +133,7 @@ main  = do
   WS.runServer "127.0.0.1" 8000 $ game state
 
 delay :: Int
-delay  = 10^7 -- 10 seconds
+delay  = 2 * 10^7 -- 20 seconds
 
 -- Compare each connected client's bet to the xor of all the clients' plays:
 -- if it is different, the client's state is unalterered;
@@ -143,16 +143,16 @@ xorAndUpdate    state             = forever $ do
   threadDelay delay
   modifyMVar_ state $ \clients -> do
       updatedClients <- forM clients $ \client ->
-          return $ if bet client /= xor clients
-                   then client
-                   else Client { -- even uglier! look into lenses for sure
-                       nick    = nick client
-                     , score   = score client + 1
-                     , play    = play client
-                     , bet     = bet client
-                     , channel = channel client
-                     }
-      broadcast (scores updatedClients) updatedClients
+        return $ if bet client /= xor clients
+                 then client
+                 else Client { -- even uglier! look into lenses for sure
+                   nick    = nick client
+                   , score   = score client + 1
+                   , play    = play client
+                   , bet     = bet client
+                   , channel = channel client
+                   }
+      broadcast ("Scores:\n" <> scores updatedClients) updatedClients
       return updatedClients
 
 game :: MVar ServerState -> WS.Request -> WS.WebSockets WS.Hybi00 ()
@@ -162,7 +162,7 @@ game    state               req         = do
   sink <- WS.getSink
   name <- WS.receiveData
   clients <- liftIO $ readMVar state
-  let client = Client {nick=name, score=0, play=0, bet=0, channel=sink}
+  let client = Client {nick = name, score = 0, play = 0, bet = 0, channel = sink}
   if clientExists client clients
     then do WS.sendTextData ("That nick is taken, choose another" :: Text)
             game state req
