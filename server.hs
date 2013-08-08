@@ -127,6 +127,7 @@ xor    clients = do
   bits <- sequence $ map readMVar inputs
   return $ sum bits
 
+-- ugly! TODO: improve
 scores :: ServerState -> Bit  -> IO Text
 scores    clients        result =
   let showPair :: (Text, MVar Int) -> IO Text
