@@ -31,12 +31,12 @@ I hope you enjoy reading it! Suggestions and pull requests welcome.
 {-# LANGUAGE OverloadedStrings, NamedFieldPuns, TemplateHaskell #-}
 
 import Control.Concurrent     (forkIO, threadDelay,
-                               MVar, newMVar, modifyMVar, modifyMVar_, readMVar)
+                               MVar, newMVar, modifyMVar_, readMVar)
 import Control.Exception      (fromException)
-import Control.Lens
+import Control.Lens           (makeLenses, over, view, set)
 import Control.Monad          (forever, forM, forM_)
 import Control.Monad.IO.Class (liftIO)
-import Data.Aeson
+import Data.Aeson             (Value(Number, String), ToJSON, toJSON, object)
 import Data.Monoid            ((<>))
 import Data.Text              (Text)
 import qualified Data.Text          as T
@@ -47,10 +47,6 @@ import qualified Network.WebSockets as WS
 -- a hack so that we can print out a representation of our clients a bit later
 instance Show (WS.Sink a) where
   show _ = "a channel for messages using a version of the WebSockets protocol"
-
-instance Show (MVar a) where
-  show _ = "some mutable variable"
-
 
 -- data types
 data Bit = Zero | One deriving (Show, Read, Eq, Ord)
@@ -64,7 +60,6 @@ instance Num Bit where
 
 data Command = Play Bit | Bet Bit deriving (Show, Read, Eq, Ord)
 
--- TODO: change this to use lenses instead of MVars
 data Client = Client {
     _nick     :: Text
   , _score    :: Int
@@ -79,17 +74,16 @@ $(makeLenses ''Client)
 
 -- only encodes publically viewable client fields
 instance ToJSON Client where
-   toJSON = undefined
-
-
+   toJSON client = object [("name", String $ view nick client),
+                           ("score", Number $ fromIntegral $ view score client)]
 
 -- client helper functions
 newClient :: Text -> WS.Sink WS.Hybi00 -> Client
 newClient    name    chan               =
-  Client{_nick=name, _score=0, _play=0, _bet=0, _channel=chan}
+  Client {_nick = name, _score = 0, _play = 0, _bet = 0, _channel = chan}
 
 clientExists :: Client -> ServerState -> Bool
-clientExists    = undefined
+clientExists = all . (/=)
 
 -- main loop will use clientExists to ensure that there are no duplicate names
 addClient :: Client -> ServerState -> ServerState
@@ -98,21 +92,20 @@ addClient = (:)
 removeClient :: Client -> ServerState -> ServerState
 removeClient = filter . (/=)
 
--- these next two look so much lenses that it can't be a coincidence
 incrementScore :: Client -> Client
-incrementScore = undefined
+incrementScore  = score `over` (+1)
 
 updateClient :: Command -> Client -> Client
-updateClient    cmd        client  = undefined
+updateClient    (Play b) = set play b
+updateClient    (Bet  b) = set bet b
 
 
 -- chat room functions
 broadcast :: Text -> ServerState -> IO ()
 broadcast    msg     clients      = do
   T.putStrLn msg -- log to console
-  undefined
-  -- forM_ clients $ \player ->
-  --   WS.sendSink (channel player) (WS.textData msg)
+  forM_ clients $ \client ->
+    WS.sendSink (view channel client) (WS.textData msg)
 
 parseMessage :: Text -> Either Text (Maybe Command)
 parseMessage    msg   = if T.head msg /= '/'
@@ -127,14 +120,15 @@ parseMessage    msg   = if T.head msg /= '/'
 
 -- game play
 xor :: ServerState -> Bit
-xor    clients      = undefined
+xor = sum . map (view bet)
 
--- ugly! TODO: improve
 scores :: ServerState -> Bit  ->  Text
 scores    clients        result =
   T.concat ["END OF ROUND! The result was ", T.pack (show result),
             ".\nUpdated Scores:\n", scoreBoard]
-  where scoreBoard = undefined
+  where names  = map (view nick) clients
+        points = map (view score) clients
+        scoreBoard = T.concat $ map (T.pack . show) $ zip names points
 
 
 -- main logic
@@ -145,21 +139,22 @@ main  = do
   _     <- forkIO $ xorAndUpdate state
   WS.runServer "127.0.0.1" 8000 $ game state
 
--- Compare each connected client's bet to the xor of all the clients' plays:
+delay = 2 * 10^7 :: Int -- twnety seconds
+
+-- Every delay seconds,
+-- compare each connected client's bet to the xor of all the clients' plays:
 -- if it is different, the client's state is unaltered;
 -- if it is the same, the client's score is incremented
 xorAndUpdate :: MVar ServerState -> IO ()
 xorAndUpdate    state             = forever $ do
-  threadDelay $ 2 * 10^7 -- 20 seconds
-  modifyMVar_ state $ \clients -> let result = xor clients in do
-    updatedClients <- forM clients $ \client ->
-      let clientBet = undefined
-      in if clientBet == result
-         then return $ incrementScore client
-         else return client
-    let scoreBoard = scores updatedClients result
-    broadcast scoreBoard updatedClients
-    return updatedClients
+  threadDelay delay
+  modifyMVar_ state $ \clients -> let xorResult = xor clients in do
+      updatedClients <- forM clients $ \client ->
+          if xorResult == view bet client
+          then return $ incrementScore client
+          else return client
+      broadcast (scores updatedClients xorResult) updatedClients
+      return updatedClients
 
 -- TODO: refactor this into smaller functions
 game :: MVar ServerState -> WS.Request -> WS.WebSockets WS.Hybi00 ()
@@ -188,18 +183,17 @@ talk    state               player  =
   flip WS.catchWsError catchDisconnect $ forever $ do
       input <- WS.receiveData
       case parseMessage input of
-        Left msg         -> liftIO $ readMVar state >>= undefined -- TODO lenses
---                                     broadcast (nick player <> ": " <> msg)
+        Left msg         -> liftIO $ readMVar state >>= 
+                                     broadcast (view nick player <> ": " <> msg)
         Right Nothing    -> WS.sendTextData ("*couldn't parse command*" :: Text)
         Right (Just cmd) -> liftIO $ modifyMVar_ state $ \clients ->
           let newPlayer = updateClient cmd player
           in  return $ addClient newPlayer $ removeClient player clients
-          
 
   where
     catchDisconnect e = case fromException e of
       Just WS.ConnectionClosed -> liftIO $ modifyMVar_ state $ \s -> do
           let s' = removeClient player s
---          broadcast (nick player <> " disconnected") s' -- TODO lenses
+          broadcast (view nick player <> " disconnected") s'
           return s'
       _                        -> return ()
