@@ -5,7 +5,7 @@ THE XOR GAME
 This file implements the server for a game in which each player makes 2 choices:
 which bit, zero or one, to XOR with every other player's choice of bit;
 and which bit, zero or one, the player bets will be the outcome of this XOR.
-The XOR takes place every ten seconds. A player gains a point when
+The XOR takes place every twenty seconds. A player gains a point when
 their bet matches the outcome. Points accumulate without limit or reward.
 
 The game takes place in a chatroom. The first message the client sends to the
@@ -28,13 +28,15 @@ I hope you enjoy reading it! Suggestions and pull requests welcome.
 
 -}
 
-{-# LANGUAGE OverloadedStrings, NamedFieldPuns #-}
+{-# LANGUAGE OverloadedStrings, NamedFieldPuns, TemplateHaskell #-}
 
 import Control.Concurrent     (forkIO, threadDelay,
                                MVar, newMVar, modifyMVar, modifyMVar_, readMVar)
 import Control.Exception      (fromException)
+import Control.Lens
 import Control.Monad          (forever, forM, forM_)
 import Control.Monad.IO.Class (liftIO)
+import Data.Aeson
 import Data.Monoid            ((<>))
 import Data.Text              (Text)
 import qualified Data.Text          as T
@@ -44,7 +46,7 @@ import qualified Network.WebSockets as WS
 
 -- a hack so that we can print out a representation of our clients a bit later
 instance Show (WS.Sink a) where
-  show _ = "some version of the WebSockets protocol"
+  show _ = "a channel for messages using a version of the WebSockets protocol"
 
 instance Show (MVar a) where
   show _ = "some mutable variable"
@@ -62,52 +64,55 @@ instance Num Bit where
 
 data Command = Play Bit | Bet Bit deriving (Show, Read, Eq, Ord)
 
+-- TODO: change this to use lenses instead of MVars
 data Client = Client {
-    nick     :: Text
-  , score    :: MVar Int
-  , play     :: MVar Bit
-  , bet      :: MVar Bit
-  , channel  :: WS.Sink WS.Hybi00
+    _nick     :: Text
+  , _score    :: Int
+  , _play     :: Bit
+  , _bet      :: Bit
+  , _channel  :: WS.Sink WS.Hybi00
   } deriving (Show, Eq)
 
 type ServerState = [Client]
 
+$(makeLenses ''Client)
+
+-- only encodes publically viewable client fields
+instance ToJSON Client where
+   toJSON = undefined
+
+
+
 -- client helper functions
-newClient :: Text -> WS.Sink WS.Hybi00 -> IO Client
-newClient    name    chan               = do
-  points <- newMVar 0
-  input  <- newMVar 0
-  gamble <- newMVar 0
-  return Client{nick=name, score=points, play=input, bet=gamble, channel=chan}
+newClient :: Text -> WS.Sink WS.Hybi00 -> Client
+newClient    name    chan               =
+  Client{_nick=name, _score=0, _play=0, _bet=0, _channel=chan}
 
 clientExists :: Client -> ServerState -> Bool
-clientExists    client                 = any (== nick client) . map nick
+clientExists    = undefined
 
--- main loop will check to ensure that there are no duplicate names
+-- main loop will use clientExists to ensure that there are no duplicate names
 addClient :: Client -> ServerState -> ServerState
 addClient = (:)
 
 removeClient :: Client -> ServerState -> ServerState
 removeClient = filter . (/=)
 
-incrementScore :: Client -> IO Client
-incrementScore    client = modifyMVar (score client) $ \n ->
-  return (n + 1, client)
+-- these next two look so much lenses that it can't be a coincidence
+incrementScore :: Client -> Client
+incrementScore = undefined
 
-updateClient :: Command -> Client -> IO Client
-updateClient    cmd        client  =
-  let (accessor, bit) = case cmd of
-        (Play b) -> (play, b)
-        (Bet  b) -> (bet,  b)
-  in modifyMVar (accessor client) $ \_ -> return (bit, client)
+updateClient :: Command -> Client -> Client
+updateClient    cmd        client  = undefined
 
 
 -- chat room functions
 broadcast :: Text -> ServerState -> IO ()
 broadcast    msg     clients      = do
-  T.putStrLn msg
-  forM_ clients $ \client ->
-    WS.sendSink (channel client) (WS.textData msg)
+  T.putStrLn msg -- log to console
+  undefined
+  -- forM_ clients $ \player ->
+  --   WS.sendSink (channel player) (WS.textData msg)
 
 parseMessage :: Text -> Either Text (Maybe Command)
 parseMessage    msg   = if T.head msg /= '/'
@@ -121,26 +126,15 @@ parseMessage    msg   = if T.head msg /= '/'
 
 
 -- game play
-xor :: ServerState -> IO Bit
-xor    clients = do
-  let inputs = map play clients
-  bits <- sequence $ map readMVar inputs
-  return $ sum bits
+xor :: ServerState -> Bit
+xor    clients      = undefined
 
 -- ugly! TODO: improve
-scores :: ServerState -> Bit  -> IO Text
+scores :: ServerState -> Bit  ->  Text
 scores    clients        result =
-  let showPair :: (Text, MVar Int) -> IO Text
-      showPair    (name, score   )  = do
-          n <- readMVar score
-          return $ T.concat ["- ", name, ": ", T.pack (show n), " points\n"]
-      getPlayerScores :: IO Text
-      getPlayerScores  = fmap T.concat . sequence $ map showPair $
-                         zip (map nick clients) (map score clients)
-  in do
-    playerScores <- getPlayerScores
-    return $ T.concat ["END OF ROUND! The result was ", T.pack (show result),
-               ".\nUpdated Scores:\n", playerScores]
+  T.concat ["END OF ROUND! The result was ", T.pack (show result),
+            ".\nUpdated Scores:\n", scoreBoard]
+  where scoreBoard = undefined
 
 
 -- main logic
@@ -157,33 +151,34 @@ main  = do
 xorAndUpdate :: MVar ServerState -> IO ()
 xorAndUpdate    state             = forever $ do
   threadDelay $ 2 * 10^7 -- 20 seconds
-  modifyMVar_ state $ \clients -> do
-    result         <- xor clients
-    updatedClients <- forM clients $ \client -> do
-        clientBet <- readMVar $ bet client
-        if clientBet == result
-          then incrementScore client >>= return
-          else return client
-    scoreBoard <- scores updatedClients result
+  modifyMVar_ state $ \clients -> let result = xor clients in do
+    updatedClients <- forM clients $ \client ->
+      let clientBet = undefined
+      in if clientBet == result
+         then return $ incrementScore client
+         else return client
+    let scoreBoard = scores updatedClients result
     broadcast scoreBoard updatedClients
     return updatedClients
 
+-- TODO: refactor this into smaller functions
 game :: MVar ServerState -> WS.Request -> WS.WebSockets WS.Hybi00 ()
 game    state               req         = do
   WS.acceptRequest req
   sink    <- WS.getSink
   WS.sendTextData ("choose a nickname" :: Text)
   name    <- WS.receiveData
-  client  <- liftIO $ newClient name sink
+  let client = newClient name sink
   clients <- liftIO $ readMVar state
   if clientExists client clients
     then do WS.sendTextData ("***that nick is taken, choose another***" :: Text)
             game state req -- BUG: this closes the connection and doesn't loop!
     else do liftIO $ modifyMVar_ state $ \s -> do
                 let s' = addClient client s
-                WS.sendSink sink $ WS.textData $ "***XOR GAME! Players: "
-                  <> T.intercalate ", " (map nick s) <> "***"
-                broadcast (nick client <> " joined") s'
+                -- TODO: rewrite this w/lenses
+                -- WS.sendSink sink $ WS.textData $ "***XOR GAME! Players: "
+                --   <> T.intercalate ", " (map nick s) <> "***"
+--                broadcast (nick client <> " joined") s'
                 return s'
             talk state client
 
@@ -193,20 +188,18 @@ talk    state               player  =
   flip WS.catchWsError catchDisconnect $ forever $ do
       input <- WS.receiveData
       case parseMessage input of
-        Left msg         -> liftIO $ readMVar state >>=
-                                       broadcast (nick player <> ": " <> msg)
-            
+        Left msg         -> liftIO $ readMVar state >>= undefined -- TODO lenses
+--                                     broadcast (nick player <> ": " <> msg)
         Right Nothing    -> WS.sendTextData ("*couldn't parse command*" :: Text)
-
-        -- inelegant to cycle through all the players; can this be improved?
         Right (Just cmd) -> liftIO $ modifyMVar_ state $ \clients ->
-          forM clients $ \client -> if client == player
-                                    then updateClient cmd client
-                                    else return client
+          let newPlayer = updateClient cmd player
+          in  return $ addClient newPlayer $ removeClient player clients
+          
+
   where
     catchDisconnect e = case fromException e of
       Just WS.ConnectionClosed -> liftIO $ modifyMVar_ state $ \s -> do
           let s' = removeClient player s
-          broadcast (nick player <> " disconnected") s'
+--          broadcast (nick player <> " disconnected") s' -- TODO lenses
           return s'
       _                        -> return ()
