@@ -30,23 +30,22 @@ I hope you enjoy reading it! Suggestions and pull requests welcome.
 
 {-# LANGUAGE OverloadedStrings, NamedFieldPuns, TemplateHaskell #-}
 
-import Control.Concurrent     (forkIO, threadDelay,
-                               MVar, newMVar, modifyMVar_, readMVar)
-import Control.Exception      (fromException)
-import Control.Lens           (makeLenses, over, view, set)
-import Control.Monad          (forever, forM, forM_)
-import Control.Monad.IO.Class (liftIO)
-import Data.Aeson             (Value(Number, String), ToJSON, toJSON, object)
-import Data.Monoid            ((<>))
-import Data.Text              (Text)
+import Control.Concurrent           (forkIO, threadDelay,
+                                     MVar, newMVar, modifyMVar_, readMVar)
+import Control.Exception            (fromException)
+import Control.Lens                 (makeLenses, over, view, set)
+import Control.Monad                (forever, forM, forM_)
+import Control.Monad.IO.Class       (liftIO)
+import Data.Aeson                   (Value(Number, String), ToJSON, toJSON,
+                                     encode, object, (.=))
+import Data.ByteString.Lazy.Char8   (unpack)
+import Data.Monoid                  ((<>))
+import Data.Function                (on)
+import Data.Text                    (Text)
 import qualified Data.Text          as T
 import qualified Data.Text.IO       as T
 import qualified Network.WebSockets as WS
 
-
--- a hack so that we can print out a representation of our clients a bit later
-instance Show (WS.Sink a) where
-  show _ = "a channel for messages using a version of the WebSockets protocol"
 
 -- data types
 data Bit = Zero | One deriving (Show, Read, Eq, Ord)
@@ -66,16 +65,19 @@ data Client = Client {
   , _play     :: Bit
   , _bet      :: Bit
   , _channel  :: WS.Sink WS.Hybi00
-  } deriving (Show, Eq)
-
+  } deriving Eq
 type ServerState = [Client]
 
 $(makeLenses ''Client)
 
 -- only encodes publically viewable client fields
 instance ToJSON Client where
-   toJSON client = object [("name", String $ view nick client),
-                           ("score", Number $ fromIntegral $ view score client)]
+   toJSON client = object ["name"  .= String (view nick client),
+                           "score" .= Number (fromIntegral $ view score client)]
+
+-- string corresponds to the above JSON encoding (of just name and score)
+instance Show Client where
+  show = unpack . encode . toJSON
 
 -- client helper functions
 newClient :: Text -> WS.Sink WS.Hybi00 -> Client
@@ -83,7 +85,7 @@ newClient    name    chan               =
   Client {_nick = name, _score = 0, _play = 0, _bet = 0, _channel = chan}
 
 clientExists :: Client -> ServerState -> Bool
-clientExists = all . (/=)
+clientExists = any . ((==) `on` view nick)
 
 -- main loop will use clientExists to ensure that there are no duplicate names
 addClient :: Client -> ServerState -> ServerState
@@ -122,13 +124,8 @@ parseMessage    msg   = if T.head msg /= '/'
 xor :: ServerState -> Bit
 xor = sum . map (view bet)
 
-scores :: ServerState -> Bit  ->  Text
-scores    clients        result =
-  T.concat ["END OF ROUND! The result was ", T.pack (show result),
-            ".\nUpdated Scores:\n", scoreBoard]
-  where names  = map (view nick) clients
-        points = map (view score) clients
-        scoreBoard = T.concat $ map (T.pack . show) $ zip names points
+scores :: ServerState -> Text
+scores = T.pack . concatMap show
 
 
 -- main logic
@@ -139,21 +136,21 @@ main  = do
   _     <- forkIO $ xorAndUpdate state
   WS.runServer "127.0.0.1" 8000 $ game state
 
-delay = 2 * 10^7 :: Int -- twnety seconds
+delay :: Int
+delay = 2 * 10^7 -- twenty seconds
 
--- Every delay seconds,
--- compare each connected client's bet to the xor of all the clients' plays:
--- if it is different, the client's state is unaltered;
--- if it is the same, the client's score is incremented
+-- Every delay seconds, compare each connected client's bet to the xor of all
+-- the clients' plays: if it is different, the client's state is unaltered;
+--                     if it is the same, the client's score is incremented
 xorAndUpdate :: MVar ServerState -> IO ()
 xorAndUpdate    state             = forever $ do
   threadDelay delay
-  modifyMVar_ state $ \clients -> let xorResult = xor clients in do
+  modifyMVar_ state $ \clients -> do
       updatedClients <- forM clients $ \client ->
-          if xorResult == view bet client
+          if xor clients == view bet client
           then return $ incrementScore client
           else return client
-      broadcast (scores updatedClients xorResult) updatedClients
+      broadcast (scores updatedClients) updatedClients
       return updatedClients
 
 -- TODO: refactor this into smaller functions
@@ -170,10 +167,9 @@ game    state               req         = do
             game state req -- BUG: this closes the connection and doesn't loop!
     else do liftIO $ modifyMVar_ state $ \s -> do
                 let s' = addClient client s
-                -- TODO: rewrite this w/lenses
-                -- WS.sendSink sink $ WS.textData $ "***XOR GAME! Players: "
-                --   <> T.intercalate ", " (map nick s) <> "***"
---                broadcast (nick client <> " joined") s'
+                WS.sendSink sink $ WS.textData $ "***XOR GAME! Players: "
+                  <> T.intercalate ", " (map (view nick) s) <> "***"
+                broadcast (view nick client <> " joined") s
                 return s'
             talk state client
 
