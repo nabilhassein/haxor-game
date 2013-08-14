@@ -3,25 +3,20 @@ var play;
 var bet;
 var result;
 
-function createWebSocket(path) {
-    var host = window.location.hostname;
-    if(host == '') host = 'localhost';
-    var uri = 'ws://' + host + ':8000' + path;
-    var Socket = "MozWebSocket" in window ? MozWebSocket : WebSocket;
-    return new Socket(uri);
-}
-
 function onMessage(message) {
+    console.log(message);
+    console.log(message.data.valueOf());
     var event = JSON.parse(message);
+    console.log(event);
     if(event.type === 'warning') {
         $('#warning').html('');
-        $('#warning').append(event.data.warning); // ByteString valid here?
+        $('#warning').append(event.data.warning);
     }
     else if(event.type === 'initialize') {
-        play   = event.data.play;
-        bet    = event.data.bet;
+        play       = event.data.play;
+        bet        = event.data.bet;
         scoreboard = event.data.scoreboard;
-        result = event.data.result;
+        result     = event.data.result;
         $('#join-section').hide();
         $('#chat-section').show();
         $('#result-section').show();
@@ -44,12 +39,12 @@ function onMessage(message) {
     }
     else if(event.type === 'scoreboard') {
         scoreboard = event.data.scoreboard;
-        result = event.data.result;
+        result     = event.data.result;
         refreshScoreboard();
         refreshResult();
     }
     else if(event.type === 'joined') {
-        var name   = event.data.name;
+        var name = event.data.name;
         $('#messages').append(name + ' joined the game.');
         $('#messages').animate({scrollTop: $('#messages')[0].scrollHeight});
     }
@@ -87,17 +82,25 @@ function refreshButtons() {
     $('#bet-button').append(bet);    
 }
 
+function createWebSocket(path) {
+    var host = window.location.hostname;
+    if(host == '') host = 'localhost';
+    var uri = 'ws://' + host + ':8000' + path;
+    var Socket = "MozWebSocket" in window ? MozWebSocket : WebSocket;
+    return new Socket(uri);
+}
+
 $(document).ready(function () {
     var ws;
     $('#join-form').submit(function () {
         $('#warnings').html('');
         var user = $('#user').val();
         ws = createWebSocket('/');
+        ws.onmessage = onMessage;
         ws.onopen = function() {
             ws.send(user);
             $('#join-section').append('Connecting...');
         };
-        ws.onmessage = onMessage;
     });
     $('#message-form').submit(function () {
         var text = $('#text').val();
