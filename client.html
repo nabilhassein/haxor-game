@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>THE XOR GAME | nabilhassein.us </title>
+        <script type="text/JavaScript"
+            src="http://code.jquery.com/jquery-1.6.3.min.js"></script>
+        <script type="text/JavaScript" src="client.js"></script>
+        <link rel="stylesheet" type="text/css" href="screen.css" />
+    </head>
+    <body>
+        <h1>THE XOR GAME</h1>
+        <div id="main">
+            <div id="warning">
+            </div>
+            <div id="join-section">
+                <h2>Join</h2>
+                <form id="join-form" action="javascript: void(0)">
+                    <label for="user">Username: </label>
+                    <input id="user" type="text" size="12" />
+                    <input id="welcome" type="submit" value="Join" />
+                </form>
+            </div>
+            <div id="scoreboard" style="display: none">
+                <h2>Scoreboard</h2>
+                <ul id="scores">
+                </ul>
+            </div>
+            <div id="chat-section" style="display: none">
+                <h2>Chat</h2>
+                <div id="messages">
+                </div>
+                <br />
+                <form id="message-form" action="javascript: void(0)">
+                    <input id="text" type="text" size="40" />
+                    <input id="talk" type="submit" value="Send" />
+                </form>
+            </div>
+            <div id="result-section" style="display: none">
+              <h2>Most recent XOR</h2>
+              <div id="result">
+              </div>
+            </div>
+            <button type="button" id="play-button" class="button">
+            </button>
+            <button type="button" id="bet-button" class="button">
+            </button>
+        </div>
+        <div id="footer">
+             <a href="http://github.com/nabilhassein/haxor-game">Source code</a>
+        </div>
+    </body>
+</html>
