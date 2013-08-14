@@ -8,12 +8,6 @@ and which bit, zero or one, the player bets will be the outcome of this XOR.
 The XOR takes place every twenty seconds. A player gains a point when
 their bet matches the outcome. Points accumulate without limit or reward.
 
-The game takes place in a chatroom. The first message the client sends to the
-server is the client's nickname. After that, most messages are interpreted as
-simple messages broadcast to everyone playing the game.
-A message is instead interpreted as a command if it has the form "/$cmd $bit"
-where $cmd is either "play" or "bet", and $bit is either "0" or "1".
-
 I chose to implement this game because it is in some sense "minimal":
 each player has exactly one bit of influence on the outcome. On the other hand,
 in some sense every player holds the outcome of the game in her hands!
@@ -28,27 +22,31 @@ I hope you enjoy reading it! Suggestions and pull requests welcome.
 
 -}
 
-{-# LANGUAGE OverloadedStrings, NamedFieldPuns, TemplateHaskell #-}
+{-# LANGUAGE OverloadedStrings, TemplateHaskell #-}
 
-import Control.Concurrent           (forkIO, threadDelay,
-                                     MVar, newMVar, modifyMVar_, readMVar)
-import Control.Exception            (fromException)
-import Control.Lens                 (makeLenses, over, view, set)
-import Control.Monad                (forever, forM, forM_)
-import Control.Monad.IO.Class       (liftIO)
-import Data.Aeson                   (Value(Number, String), ToJSON, toJSON,
-                                     encode, object, (.=))
-import Data.ByteString.Lazy.Char8   (unpack)
-import Data.Monoid                  ((<>))
-import Data.Function                (on)
-import Data.Text                    (Text)
-import qualified Data.Text          as T
-import qualified Data.Text.IO       as T
-import qualified Network.WebSockets as WS
+import Prelude                   hiding (putStrLn)
+import Control.Applicative              ((<$>), (<*>))
+import Control.Concurrent               (forkIO, threadDelay,
+                                         MVar, newMVar, modifyMVar_, readMVar)
+import Control.Exception                (fromException)
+import Control.Lens                     (makeLenses, over, view, set)
+import Control.Monad                    (forever, forM, forM_)
+import Control.Monad.IO.Class           (liftIO)
+import Data.Aeson                       (Value(Number, Object), object,
+                                         ToJSON, FromJSON, (.=), (.:?),
+                                         toJSON, parseJSON, encode, decode)
+import Data.Attoparsec.Number           (Number(I))
+import Data.ByteString.Lazy             (ByteString, append)
+import Data.ByteString.Lazy.Char8       (unpack, putStrLn)
+import Data.Text                        (pack)
+import qualified Network.WebSockets   as WS
 
 
--- data types
+
+-- data types and their instances
+
 data Bit = Zero | One deriving (Show, Read, Eq, Ord)
+
 instance Num Bit where
   x + y         = if x == y then Zero else One
   One * One     = One
@@ -57,139 +55,211 @@ instance Num Bit where
   signum        = id
   fromInteger n = if even n then Zero else One
 
-data Command = Play Bit | Bet Bit deriving (Show, Read, Eq, Ord)
+instance ToJSON Bit where
+  toJSON Zero = Number 0
+  toJSON One  = Number 1
+
+instance FromJSON Bit where
+  parseJSON (Number (I k)) = return $ fromInteger k
+  parseJSON _              = fail "not a bit"
+
+
+data Update = Update {
+    updatePlay :: Maybe Bit
+  , updateBet  :: Maybe Bit
+  } deriving Show
+
+-- ugly!
+instance ToJSON Update where
+  toJSON update = case (updatePlay update, updateBet update) of
+    (Just playBit, Just betBit) -> object ["play" .= playBit, "bet" .= betBit]
+    (Just playBit, Nothing    ) -> object ["play" .= playBit]
+    (Nothing     , Just betBit) -> object ["bet"  .= betBit ]
+    (Nothing     , Nothing    ) -> object []
+
+
+instance FromJSON Update where
+  -- All fields are optional, so accept ANY object. Reject other JSON types.
+  parseJSON (Object v) = Update <$> v .:? "play" <*> v .:? "bet"
+  parseJSON _          = fail "invalid update"
+
+
+type ServerState = [Client]
 
 data Client = Client {
-    _nick     :: Text
-  , _score    :: Int
-  , _play     :: Bit
-  , _bet      :: Bit
-  , _channel  :: WS.Sink WS.Hybi00
-  } deriving Eq
-type ServerState = [Client]
+    _nick    :: ByteString
+  , _score   :: Int
+  , _play    :: Bit
+  , _bet     :: Bit
+  , _channel :: WS.Sink WS.Hybi10
+  }
 
 $(makeLenses ''Client)
 
--- only encodes publically viewable client fields
+-- encode client as a singleton object with key == _nick, val == _score
 instance ToJSON Client where
-   toJSON client = object ["name"  .= String (view nick client),
-                           "score" .= Number (fromIntegral $ view score client)]
+   toJSON client = object [pack (show $ view nick client) .=
+                           Number (fromIntegral $ view score client)]
 
--- string corresponds to the above JSON encoding (of just name and score)
 instance Show Client where
   show = unpack . encode . toJSON
 
--- client helper functions
-newClient :: Text -> WS.Sink WS.Hybi00 -> Client
-newClient    name    chan               =
-  Client {_nick = name, _score = 0, _play = 0, _bet = 0, _channel = chan}
 
-clientExists :: Client -> ServerState -> Bool
-clientExists = any . ((==) `on` view nick)
 
--- main loop will use clientExists to ensure that there are no duplicate names
+-- Client helper functions
+
+newClient :: ByteString -> WS.Sink WS.Hybi10 -> Client
+newClient    name          chan               = Client {
+    _nick    = name
+  , _score   = 0
+  , _play    = 0
+  , _bet     = 0
+  , _channel = chan
+  }
+
+nameExists :: ByteString -> ServerState -> Bool
+nameExists    name        = any (== name) . map (view nick)
+
+-- main loop uses nameExists before this function can be reached
 addClient :: Client -> ServerState -> ServerState
-addClient = (:)
+addClient  = (:)
 
+-- remove clients by name, ignoring other field
 removeClient :: Client -> ServerState -> ServerState
-removeClient = filter . (/=)
+removeClient    client  = filter (\c -> view nick c /= view nick client)
 
 incrementScore :: Client -> Client
 incrementScore  = score `over` (+1)
 
-updateClient :: Command -> Client -> Client
-updateClient    (Play b) = set play b
-updateClient    (Bet  b) = set bet b
+-- ugly!
+updateClient :: Update -> Client -> Client
+updateClient    update    client = case (updatePlay update, updateBet update) of
+  (Just playBit, Just betBit) -> set play playBit $ set bet betBit client
+  (Just playBit, Nothing    ) -> set play playBit client
+  (Nothing     , Just betBit) -> set bet  betBit client
+  (Nothing     , Nothing    ) -> client
 
-
--- chat room functions
-broadcast :: Text -> ServerState -> IO ()
-broadcast    msg     clients      = do
-  T.putStrLn msg -- log to console
-  forM_ clients $ \client ->
-    WS.sendSink (view channel client) (WS.textData msg)
-
-parseMessage :: Text -> Either Text (Maybe Command)
-parseMessage    msg   = if T.head msg /= '/'
-                        then Left msg -- simple chat message
-                        else Right $ case msg of
-                          "/play 0" -> Just $ Play Zero
-                          "/play 1" -> Just $ Play One
-                          "/bet 0"  -> Just $ Bet Zero
-                          "/bet 1"  -> Just $ Bet One
-                          _         -> Nothing -- not a command
 
 
 -- game play
 xor :: ServerState -> Bit
-xor = sum . map (view bet)
+xor  = sum . map (view bet)
 
-scores :: ServerState -> Text
-scores = T.pack . concatMap show
 
+
+-- client-server communication
+
+-- Any Object is parsed into a Right Update; all keys except "play" and "bet"
+-- are ignored. The value should be a 0 or 1 in either case.
+-- Anything else (String, Number, etc.) is transmitted as chat (Left ByteString)
+parseMessage :: ByteString -> Either ByteString Update
+parseMessage    msg         = maybe (Left msg) Right (decode msg)
+
+-- TODO: encode like in client (event.type, event.data.message, etc.)
+broadcast :: ByteString -> ServerState -> IO ()
+broadcast    msg           clients      = do
+  putStrLn msg -- log to console
+  forM_ clients $ \client ->
+    WS.sendSink (view channel client) (WS.binaryData msg)
+
+
+-- for these next functions, cf. client.js's onMessage
+
+encodeObject :: ToJSON a => ByteString -> a ->  ByteString
+encodeObject                typename      obj =
+  encode $ object ["type" .= typename, "data" .= obj]
+
+warning :: ByteString -> ByteString
+warning    msg         = encodeObject "warning" $ object ["warning" .= msg]
+
+initialize :: ServerState -> ByteString
+initialize    clients      =
+  encodeObject "initialize" $ object ["play" .= 0, "bet" .= 0,
+                                      "scoreboard" .= clients,
+                                      "result" .= xor clients]
+
+-- program logic guarantees that only a ByteString which can be decoded
+-- is ever passed to this function
+confirmUpdate :: Update -> ByteString
+confirmUpdate    update  = encodeObject "update" update
+
+scoreboard :: ServerState -> ByteString
+scoreboard    clients      = encodeObject "scoreboard" $
+                             object ["scoreboard" .= clients]
+
+joined :: Client -> ByteString
+joined    client  = encodeObject "joined" $ object ["name" .= view nick client]
+
+left :: Client -> ByteString
+left    client  = encodeObject "left" $ object ["name" .= view nick client]
+
+chat :: Client -> ByteString -> ByteString
+chat    client    msg         =
+  encodeObject "chat" $
+  object ["message" .= (view nick client `append` ": " `append` msg)]
 
 -- main logic
 main :: IO ()
 main  = do
-  T.putStrLn "opened XOR game chat room..."
+  putStrLn "opened XOR game chat room..."
   state <- newMVar []
   _     <- forkIO $ xorAndUpdate state
   WS.runServer "127.0.0.1" 8000 $ game state
 
-delay :: Int
-delay = 2 * 10^7 -- twenty seconds
-
--- Every delay seconds, compare each connected client's bet to the xor of all
--- the clients' plays: if it is different, the client's state is unaltered;
---                     if it is the same, the client's score is incremented
+-- Every delay microseconds, compare each connected client's bet to the xor of
+-- all the clients' plays: if it is different, the client's state is unaltered;
+--                         if it is the same, the client's score is incremented
 xorAndUpdate :: MVar ServerState -> IO ()
-xorAndUpdate    state             = forever $ do
-  threadDelay delay
-  modifyMVar_ state $ \clients -> do
-      updatedClients <- forM clients $ \client ->
-          if xor clients == view bet client
-          then return $ incrementScore client
-          else return client
-      broadcast (scores updatedClients) updatedClients
-      return updatedClients
+xorAndUpdate    state             =
+  let delay = 2 * 10^7 -- twenty seconds
+  in  forever $ do
+    threadDelay delay
+    modifyMVar_ state $ \clients -> do
+        updatedClients <- forM clients $ \client ->
+            return $ if xor clients == view bet client
+                     then incrementScore client
+                     else client
+        broadcast (scoreboard updatedClients) updatedClients
+        return updatedClients
 
--- TODO: refactor this into smaller functions
-game :: MVar ServerState -> WS.Request -> WS.WebSockets WS.Hybi00 ()
+-- possibility of subtle races, resulting in two people with same name?
+getName :: MVar ServerState -> WS.WebSockets WS.Hybi10 ByteString
+getName    state      = do
+  name    <- WS.receiveData
+  clients <- liftIO $ readMVar state
+  if nameExists name clients
+    then do WS.sendBinaryData $ warning "that nick is taken, choose another"
+            getName state
+    else return name
+
+game :: MVar ServerState -> WS.Request -> WS.WebSockets WS.Hybi10 ()
 game    state               req         = do
   WS.acceptRequest req
-  sink    <- WS.getSink
-  WS.sendTextData ("choose a nickname" :: Text)
-  name    <- WS.receiveData
+  sink <- WS.getSink
+  name <- getName state
   let client = newClient name sink
-  clients <- liftIO $ readMVar state
-  if clientExists client clients
-    then do WS.sendTextData ("***that nick is taken, choose another***" :: Text)
-            game state req -- BUG: this closes the connection and doesn't loop!
-    else do liftIO $ modifyMVar_ state $ \s -> do
-                let s' = addClient client s
-                WS.sendSink sink $ WS.textData $ "***XOR GAME! Players: "
-                  <> T.intercalate ", " (map (view nick) s) <> "***"
-                broadcast (view nick client <> " joined") s
-                return s'
-            talk state client
+  liftIO $ modifyMVar_ state $ \clients -> do
+      WS.sendSink sink $ WS.binaryData $ initialize clients
+      broadcast (joined client) clients
+      return $ addClient client clients
+  talk state client
 
-
-talk :: MVar ServerState -> Client -> WS.WebSockets WS.Hybi00 ()
+talk :: MVar ServerState -> Client -> WS.WebSockets WS.Hybi10 ()
 talk    state               player  =
   flip WS.catchWsError catchDisconnect $ forever $ do
       input <- WS.receiveData
       case parseMessage input of
-        Left msg         -> liftIO $ readMVar state >>= 
-                                     broadcast (view nick player <> ": " <> msg)
-        Right Nothing    -> WS.sendTextData ("*couldn't parse command*" :: Text)
-        Right (Just cmd) -> liftIO $ modifyMVar_ state $ \clients ->
-          let newPlayer = updateClient cmd player
-          in  return $ addClient newPlayer $ removeClient player clients
-
+        Left  msg    -> liftIO $ readMVar state >>=
+                                 broadcast (chat player msg)
+        Right update -> do
+          liftIO $ modifyMVar_ state $ \clients ->
+              let newPlayer = updateClient update player
+              in  return $ addClient newPlayer $ removeClient player clients
+          WS.sendBinaryData $ confirmUpdate update
   where
     catchDisconnect e = case fromException e of
       Just WS.ConnectionClosed -> liftIO $ modifyMVar_ state $ \s -> do
           let s' = removeClient player s
-          broadcast (view nick player <> " disconnected") s'
+          broadcast (left player) s'
           return s'
-      _                        -> return ()
+      _                        -> liftIO $ putStrLn "unexpected error"
