@@ -15,31 +15,29 @@ in some sense every player holds the outcome of the game in her hands!
 Previously, I tried to implement this game using a simple HTTP server
 but I quickly realized that the request-response model is insufficient
 to model a game which takes place in real time. So I used WebSockets.
-Seeing that the standard example provided in the Haskell WebSockets library
-documentation is a simple chat server, this implementation was easy and short.
+Communication with the client takes place with JSON messages.
 
 I hope you enjoy reading it! Suggestions and pull requests welcome.
 
 -}
 
-{-# LANGUAGE OverloadedStrings, TemplateHaskell #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell   #-}
 
-import Prelude                   hiding (putStrLn)
-import Control.Applicative              ((<$>), (<*>))
-import Control.Concurrent               (forkIO, threadDelay,
-                                         MVar, newMVar, modifyMVar_, readMVar)
-import Control.Exception                (fromException)
-import Control.Lens                     (makeLenses, over, view, set)
-import Control.Monad                    (forever, forM, forM_)
-import Control.Monad.IO.Class           (liftIO)
-import Data.Aeson                       (Value(Number, Object), object,
-                                         ToJSON, FromJSON, (.=), (.:?),
-                                         toJSON, parseJSON, encode, decode)
-import Data.Attoparsec.Number           (Number(I))
-import Data.ByteString.Lazy             (ByteString, append)
-import Data.ByteString.Lazy.Char8       (unpack, putStrLn)
-import Data.Text                        (pack)
-import qualified Network.WebSockets   as WS
+import Control.Applicative            ((<$>), (<*>))
+import Control.Concurrent             (forkIO, threadDelay,
+                                       MVar, newMVar, modifyMVar_, readMVar)
+import Control.Exception              (fromException)
+import Control.Lens                   (makeLenses, over, view, set)
+import Control.Monad                  (forever, forM, forM_)
+import Control.Monad.IO.Class         (liftIO)
+import Data.Aeson                     (Value(Number, Object), ToJSON, FromJSON,
+                                       (.=), (.:?), object, toJSON, parseJSON,
+                                       encode, decode)
+import Data.Attoparsec.Number         (Number(I))
+import Data.ByteString.Lazy           (ByteString, append)
+import Data.Text                      (pack)
+import qualified Network.WebSockets as WS
 
 
 
@@ -79,7 +77,7 @@ instance ToJSON Update where
 
 
 instance FromJSON Update where
-  -- All fields are optional, so accept ANY object. Reject other JSON types.
+  -- All fields are optional, so we accept ANY object. Reject other JSON types.
   parseJSON (Object v) = Update <$> v .:? "play" <*> v .:? "bet"
   parseJSON _          = fail "invalid update"
 
@@ -96,13 +94,13 @@ data Client = Client {
 
 $(makeLenses ''Client)
 
--- encode client as a singleton object with key == _nick, val == _score
+-- {nick: score}
 instance ToJSON Client where
    toJSON client = object [pack (show $ view nick client) .=
                            Number (fromIntegral $ view score client)]
 
 instance Show Client where
-  show = unpack . encode . toJSON
+  show = show . toJSON
 
 
 
@@ -152,16 +150,16 @@ xor  = sum . map (view bet)
 -- Any Object is parsed into a Right Update; all keys except "play" and "bet"
 -- are ignored. The value should be a 0 or 1 in either case.
 -- Anything else (String, Number, etc.) is transmitted as chat (Left ByteString)
+-- TODO: better error handling
 parseMessage :: ByteString -> Either ByteString Update
 parseMessage    msg         = maybe (Left msg) Right (decode msg)
 
--- TODO: encode like in client (event.type, event.data.message, etc.)
+-- helper functions below ensure msg has correct JSON encoding
 broadcast :: ByteString -> ServerState -> IO ()
 broadcast    msg           clients      = do
-  putStrLn msg -- log to console
+  putStrLn $ show msg -- log to console
   forM_ clients $ \client ->
     WS.sendSink (view channel client) (WS.binaryData msg)
-
 
 -- for these next functions, cf. client.js's onMessage
 
@@ -174,14 +172,11 @@ warning    msg         = encodeObject "warning" $ object ["warning" .= msg]
 
 initialize :: ServerState -> ByteString
 initialize    clients      =
-  encodeObject "initialize" $ object ["play" .= 0, "bet" .= 0,
-                                      "scoreboard" .= clients,
-                                      "result" .= xor clients]
+  encodeObject "initialize" $ object ["bet"  .= 0, "scoreboard" .= clients,
+                                      "play" .= 0, "result" .= xor clients]
 
--- program logic guarantees that only a ByteString which can be decoded
--- is ever passed to this function
 confirmUpdate :: Update -> ByteString
-confirmUpdate    update  = encodeObject "update" update
+confirmUpdate  = encodeObject "update"
 
 scoreboard :: ServerState -> ByteString
 scoreboard    clients      = encodeObject "scoreboard" $
@@ -194,9 +189,10 @@ left :: Client -> ByteString
 left    client  = encodeObject "left" $ object ["name" .= view nick client]
 
 chat :: Client -> ByteString -> ByteString
-chat    client    msg         =
-  encodeObject "chat" $
+chat    client    msg         = encodeObject "chat" $
   object ["message" .= (view nick client `append` ": " `append` msg)]
+
+
 
 -- main logic
 main :: IO ()
@@ -210,9 +206,7 @@ main  = do
 -- all the clients' plays: if it is different, the client's state is unaltered;
 --                         if it is the same, the client's score is incremented
 xorAndUpdate :: MVar ServerState -> IO ()
-xorAndUpdate    state             =
-  let delay = 2 * 10^7 -- twenty seconds
-  in  forever $ do
+xorAndUpdate    state             = forever $ do
     threadDelay delay
     modifyMVar_ state $ \clients -> do
         updatedClients <- forM clients $ \client ->
@@ -221,10 +215,12 @@ xorAndUpdate    state             =
                      else client
         broadcast (scoreboard updatedClients) updatedClients
         return updatedClients
+    where
+      delay = 2 * 10^7 -- twenty seconds
 
 -- possibility of subtle races, resulting in two people with same name?
 getName :: MVar ServerState -> WS.WebSockets WS.Hybi10 ByteString
-getName    state      = do
+getName    state             = do
   name    <- WS.receiveData
   clients <- liftIO $ readMVar state
   if nameExists name clients
@@ -249,8 +245,7 @@ talk    state               player  =
   flip WS.catchWsError catchDisconnect $ forever $ do
       input <- WS.receiveData
       case parseMessage input of
-        Left  msg    -> liftIO $ readMVar state >>=
-                                 broadcast (chat player msg)
+        Left  msg    -> liftIO $ readMVar state >>= broadcast (chat player msg)
         Right update -> do
           liftIO $ modifyMVar_ state $ \clients ->
               let newPlayer = updateClient update player
