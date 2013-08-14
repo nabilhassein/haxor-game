@@ -94,13 +94,13 @@ data Client = Client {
 
 $(makeLenses ''Client)
 
--- {nick: score}
+-- { _nick: _score }
 instance ToJSON Client where
    toJSON client = object [pack (show $ view nick client) .=
                            Number (fromIntegral $ view score client)]
 
 instance Show Client where
-  show = show . toJSON
+  show = show . encode . toJSON
 
 
 
@@ -180,7 +180,8 @@ confirmUpdate  = encodeObject "update"
 
 scoreboard :: ServerState -> ByteString
 scoreboard    clients      = encodeObject "scoreboard" $
-                             object ["scoreboard" .= clients]
+                             object ["scoreboard" .= clients,
+                                     "result"     .= xor clients]
 
 joined :: Client -> ByteString
 joined    client  = encodeObject "joined" $ object ["name" .= view nick client]
@@ -247,14 +248,15 @@ talk    state               player  =
       case parseMessage input of
         Left  msg    -> liftIO $ readMVar state >>= broadcast (chat player msg)
         Right update -> do
-          liftIO $ modifyMVar_ state $ \clients ->
-              let newPlayer = updateClient update player
-              in  return $ addClient newPlayer $ removeClient player clients
-          WS.sendBinaryData $ confirmUpdate update
+            liftIO $ modifyMVar_ state $ \clients ->
+                let newPlayer = updateClient update player
+                in  return $ addClient newPlayer $ removeClient player clients
+            WS.sendBinaryData $ confirmUpdate update
   where
     catchDisconnect e = case fromException e of
       Just WS.ConnectionClosed -> liftIO $ modifyMVar_ state $ \s -> do
           let s' = removeClient player s
           broadcast (left player) s'
           return s'
-      _                        -> liftIO $ putStrLn "unexpected error"
+      _  -> liftIO . putStrLn $ "unexpected error: " ++ show player ++
+                                " encountered "  ++ show e
