@@ -3,40 +3,6 @@ var play;
 var bet;
 var result;
 
-$(document).ready(function () {
-    var ws;
-    $('#join-form').submit(function () {
-        var user = $('#user').val();
-        ws = createWebSocket('/');
-        ws.onmessage = onMessage;
-        ws.onopen = function() {
-            ws.send(user);
-            $('#join-section').append('Connecting...');
-        };
-    });
-    $('#message-form').submit(function () {
-        var text = $('#text').val();
-        ws.send(text);
-        $('#text').val('');
-        return false;
-    });
-    $('#play-button').click(function () {
-        ws.send(JSON.stringify(
-            {
-                play : play === 1 ? 0 : 1;
-            }
-        ));
-    });
-    $('#bet-button').click(function () {
-        ws.send(JSON.stringify(
-            {
-                bet : bet === 1 ? 0 : 1;
-            }
-        ));
-    });
-    return false;
-});
-
 function createWebSocket(path) {
     var host = window.location.hostname;
     if(host == '') host = 'localhost';
@@ -120,3 +86,34 @@ function refreshButtons() {
     $('#bet-button').html('');
     $('#bet-button').append(bet);    
 }
+
+$(document).ready(function () {
+    var ws;
+    $('#join-form').submit(function () {
+        $('#warnings').html('');
+        var user = $('#user').val();
+        ws = createWebSocket('/');
+        ws.onopen = function() {
+            ws.send(user);
+            $('#join-section').append('Connecting...');
+        };
+        ws.onmessage = onMessage;
+    });
+    $('#message-form').submit(function () {
+        var text = $('#text').val();
+        ws.send(text);
+        $('#text').val('');
+    });
+    $('#play-button').click(function () {
+        ws.send(JSON.stringify(
+            {play : play === 1 ? 0 : 1}
+        ));
+    });
+    $('#bet-button').click(function () {
+        ws.send(JSON.stringify(
+            {bet : bet === 1 ? 0 : 1}
+        ));
+    });
+    return false;
+});
+

@@ -172,8 +172,8 @@ warning    msg         = encodeObject "warning" $ object ["warning" .= msg]
 
 initialize :: ServerState -> ByteString
 initialize    clients      =
-  encodeObject "initialize" $ object ["bet"  .= 0, "scoreboard" .= clients,
-                                      "play" .= 0, "result" .= xor clients]
+  encodeObject "initialize" $ object ["bet"  .= Zero, "scoreboard" .= clients,
+                                      "play" .= Zero, "result" .= xor clients]
 
 confirmUpdate :: Update -> ByteString
 confirmUpdate  = encodeObject "update"
