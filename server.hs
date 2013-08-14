@@ -24,6 +24,7 @@ I hope you enjoy reading it! Suggestions and pull requests welcome.
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell   #-}
 
+import Prelude                 hiding (putStrLn)
 import Control.Applicative            ((<$>), (<*>))
 import Control.Concurrent             (forkIO, threadDelay,
                                        MVar, newMVar, modifyMVar_, readMVar)
@@ -35,8 +36,8 @@ import Data.Aeson                     (Value(Number, Object), ToJSON, FromJSON,
                                        (.=), (.:?), object, toJSON, parseJSON,
                                        encode, decode)
 import Data.Attoparsec.Number         (Number(I))
-import Data.ByteString.Lazy           (ByteString, append)
-import Data.Text                      (pack)
+import Data.Text                      (Text, append, pack)
+import Data.Text.IO                   (putStrLn)
 import qualified Network.WebSockets as WS
 
 
@@ -85,7 +86,7 @@ instance FromJSON Update where
 type ServerState = [Client]
 
 data Client = Client {
-    _nick    :: ByteString
+    _nick    :: Text
   , _score   :: Int
   , _play    :: Bit
   , _bet     :: Bit
@@ -96,18 +97,18 @@ $(makeLenses ''Client)
 
 -- { _nick: _score }
 instance ToJSON Client where
-   toJSON client = object [pack (show $ view nick client) .=
+   toJSON client = object [(view nick client) .=
                            Number (fromIntegral $ view score client)]
 
 instance Show Client where
-  show = show . encode . toJSON
+  show = show . toJSON
 
 
 
 -- Client helper functions
 
-newClient :: ByteString -> WS.Sink WS.Hybi10 -> Client
-newClient    name          chan               = Client {
+newClient :: Text -> WS.Sink WS.Hybi10 -> Client
+newClient    name    chan               = Client {
     _nick    = name
   , _score   = 0
   , _play    = 0
@@ -115,8 +116,8 @@ newClient    name          chan               = Client {
   , _channel = chan
   }
 
-nameExists :: ByteString -> ServerState -> Bool
-nameExists    name        = any (== name) . map (view nick)
+nameExists :: Text -> ServerState -> Bool
+nameExists    name  = any (== name) . map (view nick)
 
 -- main loop uses nameExists before this function can be reached
 addClient :: Client -> ServerState -> ServerState
@@ -149,48 +150,51 @@ xor  = sum . map (view bet)
 
 -- Any Object is parsed into a Right Update; all keys except "play" and "bet"
 -- are ignored. The value should be a 0 or 1 in either case.
--- Anything else (String, Number, etc.) is transmitted as chat (Left ByteString)
+-- Anything else (String, Number, etc.) is transmitted as chat (Left Text)
 -- TODO: better error handling
-parseMessage :: ByteString -> Either ByteString Update
-parseMessage    msg         = maybe (Left msg) Right (decode msg)
+parseMessage :: Text -> Either Text Update
+parseMessage    msg   = case decode (encode $ show msg) of -- TODO: double check
+  Nothing -> Left msg
+  Just u  -> Right u
 
 -- helper functions below ensure msg has correct JSON encoding
-broadcast :: ByteString -> ServerState -> IO ()
-broadcast    msg           clients      = do
-  putStrLn $ show msg -- log to console
+broadcast :: Text -> ServerState -> IO ()
+broadcast    msg     clients      = do
+  putStrLn msg -- log to console
   forM_ clients $ \client ->
-    WS.sendSink (view channel client) (WS.binaryData msg)
+    WS.sendSink (view channel client) (WS.textData msg)
 
 -- for these next functions, cf. client.js's onMessage
 
-encodeObject :: ToJSON a => ByteString -> a ->  ByteString
-encodeObject                typename      obj =
-  encode $ object ["type" .= typename, "data" .= obj]
+-- TODO: double check this
+encodeObject :: ToJSON a => Text     -> a -> Text
+encodeObject                typename    obj =
+  pack . show $ object ["type" .= typename, "data" .= obj]
 
-warning :: ByteString -> ByteString
-warning    msg         = encodeObject "warning" $ object ["warning" .= msg]
+warning :: Text -> Text
+warning    msg   = encodeObject "warning" $ object ["warning" .= msg]
 
-initialize :: ServerState -> ByteString
+initialize :: ServerState -> Text
 initialize    clients      =
   encodeObject "initialize" $ object ["bet"  .= Zero, "scoreboard" .= clients,
                                       "play" .= Zero, "result" .= xor clients]
 
-confirmUpdate :: Update -> ByteString
+confirmUpdate :: Update -> Text
 confirmUpdate  = encodeObject "update"
 
-scoreboard :: ServerState -> ByteString
+scoreboard :: ServerState -> Text
 scoreboard    clients      = encodeObject "scoreboard" $
                              object ["scoreboard" .= clients,
                                      "result"     .= xor clients]
 
-joined :: Client -> ByteString
+joined :: Client -> Text
 joined    client  = encodeObject "joined" $ object ["name" .= view nick client]
 
-left :: Client -> ByteString
+left :: Client -> Text
 left    client  = encodeObject "left" $ object ["name" .= view nick client]
 
-chat :: Client -> ByteString -> ByteString
-chat    client    msg         = encodeObject "chat" $
+chat :: Client -> Text -> Text
+chat    client    msg   = encodeObject "chat" $
   object ["message" .= (view nick client `append` ": " `append` msg)]
 
 
@@ -220,12 +224,12 @@ xorAndUpdate    state             = forever $ do
       delay = 2 * 10^7 -- twenty seconds
 
 -- possibility of subtle races, resulting in two people with same name?
-getName :: MVar ServerState -> WS.WebSockets WS.Hybi10 ByteString
+getName :: MVar ServerState -> WS.WebSockets WS.Hybi10 Text
 getName    state             = do
   name    <- WS.receiveData
   clients <- liftIO $ readMVar state
   if nameExists name clients
-    then do WS.sendBinaryData $ warning "that nick is taken, choose another"
+    then do WS.sendTextData $ warning "that nick is taken, choose another"
             getName state
     else return name
 
@@ -236,7 +240,7 @@ game    state               req         = do
   name <- getName state
   let client = newClient name sink
   liftIO $ modifyMVar_ state $ \clients -> do
-      WS.sendSink sink $ WS.binaryData $ initialize clients
+      WS.sendSink sink $ WS.textData $ initialize clients
       broadcast (joined client) clients
       return $ addClient client clients
   talk state client
@@ -251,12 +255,12 @@ talk    state               player  =
             liftIO $ modifyMVar_ state $ \clients ->
                 let newPlayer = updateClient update player
                 in  return $ addClient newPlayer $ removeClient player clients
-            WS.sendBinaryData $ confirmUpdate update
+            WS.sendTextData $ confirmUpdate update
   where
     catchDisconnect e = case fromException e of
       Just WS.ConnectionClosed -> liftIO $ modifyMVar_ state $ \s -> do
           let s' = removeClient player s
           broadcast (left player) s'
           return s'
-      _  -> liftIO . putStrLn $ "unexpected error: " ++ show player ++
-                                " encountered "  ++ show e
+      _  -> liftIO . putStrLn $ "unexpected error: " `append`
+            pack (show player)  `append` " encountered "  `append` pack (show e)
