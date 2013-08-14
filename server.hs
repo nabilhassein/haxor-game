@@ -93,7 +93,7 @@ data Client = Client {
   , _score   :: Int
   , _play    :: Bit
   , _bet     :: Bit
-  , _channel :: WS.Sink WS.Hybi10
+  , _channel :: WS.Sink WS.Hybi00
   }
 
 $(makeLenses ''Client)
@@ -110,7 +110,7 @@ instance Show Client where
 
 -- Client helper functions
 
-newClient :: Text -> WS.Sink WS.Hybi10 -> Client
+newClient :: Text -> WS.Sink WS.Hybi00 -> Client
 newClient    name    chan               = Client {
     _nick    = name
   , _score   = 0
@@ -227,7 +227,7 @@ xorAndUpdate    state             = forever $ do
       delay = 2 * 10^7 -- twenty seconds
 
 -- possibility of subtle races, resulting in two people with same name?
-getName :: MVar ServerState -> WS.WebSockets WS.Hybi10 Text
+getName :: MVar ServerState -> WS.WebSockets WS.Hybi00 Text
 getName    state             = do
   name    <- WS.receiveData
   clients <- liftIO $ readMVar state
@@ -236,7 +236,7 @@ getName    state             = do
             getName state
     else return name
 
-game :: MVar ServerState -> WS.Request -> WS.WebSockets WS.Hybi10 ()
+game :: MVar ServerState -> WS.Request -> WS.WebSockets WS.Hybi00 ()
 game    state               req         = do
   WS.acceptRequest req
   sink <- WS.getSink
@@ -248,7 +248,7 @@ game    state               req         = do
       return $ addClient client clients
   talk state client
 
-talk :: MVar ServerState -> Client -> WS.WebSockets WS.Hybi10 ()
+talk :: MVar ServerState -> Client -> WS.WebSockets WS.Hybi00 ()
 talk    state               player  =
   flip WS.catchWsError catchDisconnect $ forever $ do
       input <- WS.receiveData
