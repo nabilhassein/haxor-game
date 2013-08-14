@@ -35,9 +35,12 @@ import Control.Monad.IO.Class         (liftIO)
 import Data.Aeson                     (Value(Number, Object), ToJSON, FromJSON,
                                        (.=), (.:?), object, toJSON, parseJSON,
                                        encode, decode)
+import Data.Aeson.Encode              (fromValue)
 import Data.Attoparsec.Number         (Number(I))
 import Data.Text                      (Text, append, pack)
 import Data.Text.IO                   (putStrLn)
+import Data.Text.Lazy                 (toStrict)
+import Data.Text.Lazy.Builder         (toLazyText)
 import qualified Network.WebSockets as WS
 
 
@@ -169,7 +172,7 @@ broadcast    msg     clients      = do
 -- TODO: double check this
 encodeObject :: ToJSON a => Text     -> a -> Text
 encodeObject                typename    obj =
-  pack . show $ object ["type" .= typename, "data" .= obj]
+  toStrict . toLazyText . fromValue $ object ["type" .= typename, "data" .= obj]
 
 warning :: Text -> Text
 warning    msg   = encodeObject "warning" $ object ["warning" .= msg]

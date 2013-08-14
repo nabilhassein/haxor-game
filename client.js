@@ -4,19 +4,17 @@ var bet;
 var result;
 
 function onMessage(message) {
-    console.log(message);
-    console.log(message.data.valueOf());
-    var event = JSON.parse(message);
+    var event = JSON.parse(message.data);
     console.log(event);
     if(event.type === 'warning') {
         $('#warning').html('');
-        $('#warning').append(event.data.warning);
+        $('#warning').append(event.warning);
     }
     else if(event.type === 'initialize') {
-        play       = event.data.play;
-        bet        = event.data.bet;
-        scoreboard = event.data.scoreboard;
-        result     = event.data.result;
+        play       = event.play;
+        bet        = event.bet;
+        scoreboard = event.scoreboard;
+        result     = event.result;
         $('#join-section').hide();
         $('#chat-section').show();
         $('#result-section').show();
@@ -28,33 +26,33 @@ function onMessage(message) {
         refreshButtons();
     }
     else if(event.type === 'update') {
-        // not `if(event.data.bet)` because bet might be 0, which is falsy
-        if(event.data.hasOwnProperty('bet')){
-            bet = event.data.bet;
+        // not `if(event.bet)` because bet might be 0, which is falsy
+        if(event.hasOwnProperty('bet')){
+            bet = event.bet;
         }
-        if(event.data.hasOwnProperty('play')){
-            play = event.data.play;
+        if(event.hasOwnProperty('play')){
+            play = event.play;
         }
         refreshButtons();
     }
     else if(event.type === 'scoreboard') {
-        scoreboard = event.data.scoreboard;
-        result     = event.data.result;
+        scoreboard = event.scoreboard;
+        result     = event.result;
         refreshScoreboard();
         refreshResult();
     }
     else if(event.type === 'joined') {
-        var name = event.data.name;
+        var name = event.name;
         $('#messages').append(name + ' joined the game.');
         $('#messages').animate({scrollTop: $('#messages')[0].scrollHeight});
     }
     else if(event.type === 'left') {
-        var name = event.data.name;
+        var name = event.name;
         $('#messages').append(name + ' left the game.');
         $('#messages').animate({scrollTop: $('#messages')[0].scrollHeight});
     }
     else if(event.type === 'chat') {
-        var p = $(document.createElement('p')).text(event.data.message);
+        var p = $(document.createElement('p')).text(event.message);
         $('#messages').append(p);
         $('#messages').animate({scrollTop: $('#messages')[0].scrollHeight});
     }
