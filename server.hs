@@ -100,10 +100,11 @@ data Client = Client {
 
 $(makeLenses ''Client)
 
--- { _nick: _score }
+-- { "name": _nick, "score": _score }
 instance ToJSON Client where
   toJSON client =
-    object [(view nick client) .= Number (fromIntegral $ view score client)]
+    object ["name" .= (view nick client),
+            "score".= Number (fromIntegral $ view score client)]
 
 instance Show Client where
   show = show . toJSON
