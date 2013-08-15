@@ -207,11 +207,10 @@ chat    client    msg   = encodeObject "chat" $
 -- main logic
 main :: IO ()
 main  = do
-  port <- getEnv "PORT"
   putStrLn "opened XOR game chat room..."
   state <- newMVar []
   _     <- forkIO $ xorAndUpdate state
-  WS.runServer "0.0.0.0" (fromIntegral $ read port) (game state)
+  WS.runServer "0.0.0.0" 80 (game state)
 
 -- Every delay microseconds, compare each connected client's bet to the xor of
 -- all the clients' plays: if it is different, the client's state is unaltered;
