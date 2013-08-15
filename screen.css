@@ -21,7 +21,7 @@ h2 {
 }
 
 div#main {
-    width: 600px;
+    width: 1000px;
     margin: 0px auto 0px auto;
     padding: 0px;
     background-color: #fff;
@@ -54,20 +54,20 @@ ul#scores {
 }
 
 div#chat-section {
-    width: 390px;
+    width: 600px;
     float: left;
     margin: 10px;
 }
 
 div#result-section {
     width: 100px;
-    float: center;
+    float: right;
     margin: 10px;
 }
 
-div#button {
+div#buttons {
+    float: right;
     width: 50px;
-    float: center;
     margin: 5px;
 }
 

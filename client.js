@@ -5,16 +5,15 @@ var result;
 
 function onMessage(message) {
     var event = JSON.parse(message.data);
-    console.log(event);
     if(event.type === 'warning') {
         $('#warning').html('');
-        $('#warning').append(event.warning);
+        $('#warning').append(event.data.warning);
     }
     else if(event.type === 'initialize') {
-        play       = event.play;
-        bet        = event.bet;
-        scoreboard = event.scoreboard;
-        result     = event.result;
+        play       = event.data.play;
+        bet        = event.data.bet;
+        scoreboard = event.data.scoreboard;
+        result     = event.data.result;
         $('#join-section').hide();
         $('#chat-section').show();
         $('#result-section').show();
@@ -26,47 +25,49 @@ function onMessage(message) {
         refreshButtons();
     }
     else if(event.type === 'update') {
-        // not `if(event.bet)` because bet might be 0, which is falsy
-        if(event.hasOwnProperty('bet')){
-            bet = event.bet;
+        // not `if(event.data.bet)` because bet might be 0, which is falsy
+        if(event.data.hasOwnProperty('bet')){
+            bet = event.data.bet;
         }
-        if(event.hasOwnProperty('play')){
-            play = event.play;
+        if(event.data.hasOwnProperty('play')){
+            play = event.data.play;
         }
         refreshButtons();
     }
     else if(event.type === 'scoreboard') {
-        scoreboard = event.scoreboard;
-        result     = event.result;
+        scoreboard = event.data.scoreboard;
+        result     = event.data.result;
         refreshScoreboard();
         refreshResult();
     }
     else if(event.type === 'joined') {
-        var name = event.name;
-        $('#messages').append(name + ' joined the game.');
+        var name = event.data.name;
+        $('#messages').append(name + ' joined the game.\n');
         $('#messages').animate({scrollTop: $('#messages')[0].scrollHeight});
     }
     else if(event.type === 'left') {
-        var name = event.name;
-        $('#messages').append(name + ' left the game.');
+        var name = event.data.name;
+        $('#messages').append(name + ' left the game.\n');
         $('#messages').animate({scrollTop: $('#messages')[0].scrollHeight});
     }
     else if(event.type === 'chat') {
-        var p = $(document.createElement('p')).text(event.message);
+        var p = $(document.createElement('p')).text(event.data.message);
         $('#messages').append(p);
         $('#messages').animate({scrollTop: $('#messages')[0].scrollHeight});
     }
 }
 
 function refreshScoreboard() {
+    console.log(scoreboard);
     $('#scoreboard').html('');
-    for(var i in scoreboard) {
-        $('#scoreboard').append(
-            $(document.createElement('li')).text(i + ': ' + scoreboard[i])
-            // scoreboard is an array of objects; keys are names, vals are ints
-        );
-    }
+    $(scoreboard).each(showScore);
 }
+
+var showScore = function(i, elem){
+    $('#scoreboard').append(
+        $(document.createElement('li')).text(elem.name + ': ' + elem.score)
+    );
+};
 
 function refreshResult() {
     $('#result').html('');
@@ -97,7 +98,6 @@ $(document).ready(function () {
         ws.onmessage = onMessage;
         ws.onopen = function() {
             ws.send(user);
-            $('#join-section').append('Connecting...');
         };
     });
     $('#message-form').submit(function () {
