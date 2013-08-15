@@ -34,10 +34,12 @@ import Control.Monad                  (forever, forM, forM_)
 import Control.Monad.IO.Class         (liftIO)
 import Data.Aeson                     (Value(Number, Object), ToJSON, FromJSON,
                                        (.=), (.:?), object, toJSON, parseJSON,
-                                       encode, decode)
+                                       decode)
 import Data.Aeson.Encode              (fromValue)
 import Data.Attoparsec.Number         (Number(I))
+import Data.ByteString.Lazy           (fromStrict)
 import Data.Text                      (Text, append, pack)
+import Data.Text.Encoding             (encodeUtf8)
 import Data.Text.IO                   (putStrLn)
 import Data.Text.Lazy                 (toStrict)
 import Data.Text.Lazy.Builder         (toLazyText)
@@ -100,8 +102,8 @@ $(makeLenses ''Client)
 
 -- { _nick: _score }
 instance ToJSON Client where
-   toJSON client = object [(view nick client) .=
-                           Number (fromIntegral $ view score client)]
+  toJSON client =
+    object [(view nick client) .= Number (fromIntegral $ view score client)]
 
 instance Show Client where
   show = show . toJSON
@@ -154,11 +156,10 @@ xor  = sum . map (view bet)
 -- Any Object is parsed into a Right Update; all keys except "play" and "bet"
 -- are ignored. The value should be a 0 or 1 in either case.
 -- Anything else (String, Number, etc.) is transmitted as chat (Left Text)
--- TODO: better error handling
+-- TODO: implement better error handling
 parseMessage :: Text -> Either Text Update
-parseMessage    msg   = case decode (encode $ show msg) of -- TODO: double check
-  Nothing -> Left msg
-  Just u  -> Right u
+parseMessage    msg =
+  maybe (Left msg) Right (decode . fromStrict $ encodeUtf8 msg)
 
 -- helper functions below ensure msg has correct JSON encoding
 broadcast :: Text -> ServerState -> IO ()
@@ -187,8 +188,7 @@ confirmUpdate  = encodeObject "update"
 
 scoreboard :: ServerState -> Text
 scoreboard    clients      = encodeObject "scoreboard" $
-                             object ["scoreboard" .= clients,
-                                     "result"     .= xor clients]
+  object ["scoreboard" .= clients, "result" .= xor clients]
 
 joined :: Client -> Text
 joined    client  = encodeObject "joined" $ object ["name" .= view nick client]
@@ -232,7 +232,7 @@ getName    state             = do
   name    <- WS.receiveData
   clients <- liftIO $ readMVar state
   if nameExists name clients
-    then do WS.sendTextData $ warning "that nick is taken, choose another"
+    then do WS.sendTextData $ warning "That nickname is taken. Choose another"
             getName state
     else return name
 
