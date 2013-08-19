@@ -207,11 +207,7 @@ main  = do
   putStrLn "opened XOR game chat room..."
   state <- newMVar []
   _     <- forkIO $ xorAndUpdate state
-<<<<<<< HEAD:src/Main.hs
-  WS.runServer "0.0.0.0" 80 (game state)
-=======
-  WS.runServer "127.0.0.1" 8080 $ game state
->>>>>>> revisions:server.hs
+  WS.runServer "0.0.0.0" 8080 (game state)
 
 -- Every delay microseconds, compare each connected client's bet to the xor of
 -- all the clients' plays: if it is different, the client's state is unaltered;
