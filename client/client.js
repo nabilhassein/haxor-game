@@ -13,7 +13,6 @@ function onMessage(message) {
         play       = event.data.play;
         bet        = event.data.bet;
         scoreboard = event.data.scoreboard;
-        result     = event.data.result;
         $('#join-section').hide();
         $('#chat-section').show();
         $('#result-section').show();
@@ -21,11 +20,10 @@ function onMessage(message) {
         $('#bet-button').show();
         $('#scoreboard').show();
         refreshScoreboard();
-        refreshResult();
         refreshButtons();
     }
     else if(event.type === 'update') {
-        // not `if(event.data.bet)` because bet might be 0, which is falsy
+    //not `if(event.data.bet|play)` because bet|play might be 0, which is falsy
         if(event.data.hasOwnProperty('bet')){
             bet = event.data.bet;
         }
@@ -58,7 +56,6 @@ function onMessage(message) {
 }
 
 function refreshScoreboard() {
-    console.log(scoreboard);
     $('#scoreboard').html('');
     $(scoreboard).each(showScore);
 }
@@ -84,7 +81,8 @@ function refreshButtons() {
 function createWebSocket(path) {
     var host = window.location.hostname;
     if(host == '') host = 'localhost';
-    var uri = 'ws://' + host + ':8000' + path;
+    var port = 8080;
+    var uri = 'ws://' + host + ':' + port + path;
     var Socket = "MozWebSocket" in window ? MozWebSocket : WebSocket;
     return new Socket(uri);
 }

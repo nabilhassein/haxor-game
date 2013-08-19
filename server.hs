@@ -103,8 +103,8 @@ $(makeLenses ''Client)
 -- { "name": _nick, "score": _score }
 instance ToJSON Client where
   toJSON client =
-    object ["name" .= (view nick client),
-            "score".= Number (fromIntegral $ view score client)]
+    object ["name"  .= view nick client,
+            "score" .= Number (fromIntegral $ view score client)]
 
 instance Show Client where
   show = show . toJSON
@@ -122,16 +122,16 @@ newClient    name    chan               = Client {
   , _channel = chan
   }
 
-nameExists :: Text -> ServerState -> Bool
-nameExists    name  = any (== name) . map (view nick)
+nameUnique :: Text -> ServerState -> Bool
+nameUnique    name  = notElem name . map (view nick)
 
 -- main loop uses nameExists before this function can be reached
 addClient :: Client -> ServerState -> ServerState
 addClient  = (:)
 
--- remove clients by name, ignoring other field
+-- remove clients by name, ignoring other fields
 removeClient :: Client -> ServerState -> ServerState
-removeClient    client  = filter (\c -> view nick c /= view nick client)
+removeClient    client  = filter $ \c -> view nick c /= view nick client
 
 incrementScore :: Client -> Client
 incrementScore  = score `over` (+1)
@@ -146,7 +146,7 @@ updateClient    update    client = case (updatePlay update, updateBet update) of
 
 
 
--- game play
+-- game mechanic
 xor :: ServerState -> Bit
 xor  = sum . map (view bet)
 
@@ -157,7 +157,6 @@ xor  = sum . map (view bet)
 -- Any Object is parsed into a Right Update; all keys except "play" and "bet"
 -- are ignored. The value should be a 0 or 1 in either case.
 -- Anything else (String, Number, etc.) is transmitted as chat (Left Text)
--- TODO: implement better error handling
 parseMessage :: Text -> Either Text Update
 parseMessage    msg =
   maybe (Left msg) Right (decode . fromStrict $ encodeUtf8 msg)
@@ -165,13 +164,12 @@ parseMessage    msg =
 -- helper functions below ensure msg has correct JSON encoding
 broadcast :: Text -> ServerState -> IO ()
 broadcast    msg     clients      = do
-  putStrLn msg -- log to console
+  putStrLn $ "BROADCAST: " `append` msg -- log to console
   forM_ clients $ \client ->
     WS.sendSink (view channel client) (WS.textData msg)
 
 -- for these next functions, cf. client.js's onMessage
 
--- TODO: double check this
 encodeObject :: ToJSON a => Text     -> a -> Text
 encodeObject                typename    obj =
   toStrict . toLazyText . fromValue $ object ["type" .= typename, "data" .= obj]
@@ -180,9 +178,8 @@ warning :: Text -> Text
 warning    msg   = encodeObject "warning" $ object ["warning" .= msg]
 
 initialize :: ServerState -> Text
-initialize    clients      =
-  encodeObject "initialize" $ object ["bet"  .= Zero, "scoreboard" .= clients,
-                                      "play" .= Zero, "result" .= xor clients]
+initialize    clients      = encodeObject "initialize" $
+  object ["play" .= Zero, "bet" .= Zero, "scoreboard" .= clients]
 
 confirmUpdate :: Update -> Text
 confirmUpdate  = encodeObject "update"
@@ -209,7 +206,7 @@ main  = do
   putStrLn "opened XOR game chat room..."
   state <- newMVar []
   _     <- forkIO $ xorAndUpdate state
-  WS.runServer "127.0.0.1" 8000 $ game state
+  WS.runServer "127.0.0.1" 8080 $ game state
 
 -- Every delay microseconds, compare each connected client's bet to the xor of
 -- all the clients' plays: if it is different, the client's state is unaltered;
@@ -232,10 +229,10 @@ getName :: MVar ServerState -> WS.WebSockets WS.Hybi00 Text
 getName    state             = do
   name    <- WS.receiveData
   clients <- liftIO $ readMVar state
-  if nameExists name clients
-    then do WS.sendTextData $ warning "That nickname is taken. Choose another"
+  if nameUnique name clients
+    then return name
+    else do WS.sendTextData $ warning "That nickname is taken. Choose another"
             getName state
-    else return name
 
 game :: MVar ServerState -> WS.Request -> WS.WebSockets WS.Hybi00 ()
 game    state               req         = do
