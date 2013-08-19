@@ -81,7 +81,7 @@ function refreshButtons() {
 function createWebSocket(path) {
     var host = window.location.hostname;
     if(host == '') host = 'localhost';
-    var port = 8080;
+    var port = 80;
     var uri = 'ws://' + host + ':' + port + path;
     var Socket = "MozWebSocket" in window ? MozWebSocket : WebSocket;
     return new Socket(uri);
