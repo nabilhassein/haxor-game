@@ -43,7 +43,7 @@ import Data.Text.Encoding             (encodeUtf8)
 import Data.Text.IO                   (putStrLn)
 import Data.Text.Lazy                 (toStrict)
 import Data.Text.Lazy.Builder         (toLazyText)
-import System.Environment             (getEnv)
+import Web.Scotty                     (file, get, header, scotty)
 import qualified Network.WebSockets as WS
 
 
@@ -126,7 +126,7 @@ newClient    name    chan               = Client {
 nameUnique :: Text -> ServerState -> Bool
 nameUnique    name  = notElem name . map (view nick)
 
--- main loop uses nameExists before this function can be reached
+-- main loop uses nameUnique before this function can be reached
 addClient :: Client -> ServerState -> ServerState
 addClient  = (:)
 
@@ -204,10 +204,27 @@ chat    client    msg   = encodeObject "chat" $
 -- main logic
 main :: IO ()
 main  = do
-  putStrLn "opened XOR game chat room..."
   state <- newMVar []
+  _     <- forkIO static
   _     <- forkIO $ xorAndUpdate state
+  putStrLn "opened XOR game chat room..."
   WS.runServer "0.0.0.0" 8080 (game state)
+
+static :: IO ()
+static = scotty 80 $ do
+  let prefix = "/home/nabil/repos/haxor-game/shared/client/"
+
+  get "/" $ do
+    header "content-type" "text/html"
+    file $ prefix ++ "index.html"
+
+  get "/screen.css" $ do
+    header "content-type" "text/css"
+    file $ prefix ++ "screen.css"
+
+  get "/client.js" $ do
+    header "content-type" "text/JavaScript"
+    file $ prefix ++ "client.js"
 
 -- Every delay microseconds, compare each connected client's bet to the xor of
 -- all the clients' plays: if it is different, the client's state is unaltered;
