@@ -207,12 +207,12 @@ main  = do
   state <- newMVar []
   _     <- forkIO static
   _     <- forkIO $ xorAndUpdate state
+  _     <- forkIO $ WS.runServer "0.0.0.0" 8080 (game state)
   putStrLn "opened XOR game chat room..."
-  WS.runServer "0.0.0.0" 8080 (game state)
 
 static :: IO ()
 static = scotty 80 $ do
-  let prefix = "/home/nabil/repos/haxor-game/shared/client/"
+  let prefix = "/vagrant/client/"
 
   get "/" $ do
     header "content-type" "text/html"
